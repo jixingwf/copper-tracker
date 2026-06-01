@@ -69,7 +69,7 @@ def fetch_copper_price():
         if hist.empty:
             return result
         latest = hist.iloc[-1]
-        price_usd_per_ton = latest['Close'] / 100 * 2204.62
+        price_usd_per_ton = latest["Close"] / 100 * 2204.62
         result['lme'] = round(price_usd_per_ton, 0)
         result['comex_price_raw'] = round(latest['Close'], 4)
         result['price_date'] = hist.index[-1].strftime('%Y-%m-%d')
