@@ -1,0 +1,62 @@
+name: Daily Copper Data
+
+on:
+  schedule:
+    # 北京时间 10:00 = UTC 02:00，工作日执行
+    - cron: '0 2 * * 1-5'
+  workflow_dispatch:   # 允许手动触发
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install requests pandas openpyxl supabase yfinance python-dotenv akshare
+
+      - name: 抓取 COMEX 铜价 + CFTC 持仓
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 scraper.py --once
+
+      - name: 抓取 CME COMEX 铜库存
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 fetch_cme_comex.py
+        continue-on-error: true
+
+      - name: 抓取 LME + SHFE 铜库存（每周一执行）
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          DAY=$(date +%u)
+          if [ "$DAY" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python3 import_lme.py
+          else
+            echo "非周一，跳过LME/SHFE更新"
+          fi
+        continue-on-error: true
+
+      - name: 抓取有色金属（铝/锌/镍/铅/锡）每周五执行
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          DAY=$(date +%u)
+          if [ "$DAY" = "5" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python3 import_nonfer.py
+          else
+            echo "非周五，跳过有色金属更新"
+          fi
+        continue-on-error: true
