@@ -9,8 +9,14 @@ import time
 import json
 from supabase import create_client
 
-SUPABASE_URL = 'https://opgqjxkaocggconjxgpi.supabase.co'
-SUPABASE_KEY = 'sb_secret_wMEiaD2wNjcwYeOD7fPagQ_SlEI8jqj'
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://opgqjxkaocggconjxgpi.supabase.co')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
 client = create_client(SUPABASE_URL, SUPABASE_KEY)
 

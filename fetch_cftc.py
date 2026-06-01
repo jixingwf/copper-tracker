@@ -2,15 +2,22 @@
 """
 CFTC 铜持仓历史数据抓取 + 写入 Supabase
 运行：python3 fetch_cftc.py
+GitHub Actions：自动从环境变量读取 SUPABASE_URL / SUPABASE_KEY
 """
 
-import requests
-import pandas as pd
-import time
+import os, requests, pandas as pd, time
+from datetime import datetime
 from io import StringIO
 
-SUPABASE_URL = 'https://opgqjxkaocggconjxgpi.supabase.co'
-SUPABASE_KEY = 'YOUR_SECRET_KEY'   # ← 填你的 secret key
+# ── 优先从环境变量读取，本地用 .env 文件 ──
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://opgqjxkaocggconjxgpi.supabase.co')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')   # 从环境变量读取，不硬编码
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -18,24 +25,12 @@ HEADERS = {
 }
 
 def fetch_cftc():
-    """
-    CFTC 提供标准 CSV 格式，字段含义：
-    https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm
-    使用 Legacy COT 格式（比 Disaggregated 更稳定）
-    铜的 CFTC Code: 085692
-    """
     print("下载 CFTC Legacy COT 历史数据...")
-
     all_records = []
 
-    # Legacy COT：近3年合并文件
     urls = [
         ('近3年', 'https://www.cftc.gov/dea/newcot/deacot.txt'),
     ]
-
-    # 更多历史年份（可选，取消注释）
-    # for year in range(2019, 2025):
-    #     urls.append((str(year), f'https://www.cftc.gov/files/dea/history/deacot{year}.zip'))
 
     for label, url in urls:
         try:
@@ -44,12 +39,8 @@ def fetch_cftc():
             resp.raise_for_status()
             print(f"    状态码: {resp.status_code}, 大小: {len(resp.content)//1024} KB")
 
-            # Legacy COT 是固定宽度或逗号分隔
-            # 先找铜相关行
             lines = resp.text.split('\n')
             print(f"    总行数: {len(lines)}")
-
-            # 打印前3行看格式
             for i, line in enumerate(lines[:3]):
                 print(f"    样本行{i}: {line[:120]}")
 
@@ -69,20 +60,10 @@ def fetch_cftc():
                 if len(fields) < 10:
                     continue
                 try:
-                    # Legacy COT 字段顺序：
-                    # 0: Market_and_Exchange_Names
-                    # 2: Report_Date_as_MM_DD_YYYY 或 YYYY-MM-DD
-                    # 5: Open_Interest_All
-                    # 6: NonComm_Positions_Long_All
-                    # 7: NonComm_Positions_Short_All
-                    # 8: NonComm_Positions_Spread_All
-
                     raw_date = fields[2].strip()
-                    # 尝试多种日期格式
                     dt = None
                     for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y%m%d']:
                         try:
-                            from datetime import datetime
                             dt = datetime.strptime(raw_date, fmt).date()
                             break
                         except:
@@ -133,14 +114,10 @@ def fetch_cftc():
 
 
 def fetch_cftc_csv_fallback():
-    """
-    备用方式：下载 CFTC 提供的完整 ZIP 文件（CSV格式）
-    """
-    print("尝试备用下载方式（ZIP格式）...")
     import zipfile
     from io import BytesIO
-    from datetime import datetime
 
+    print("尝试备用下载方式（ZIP格式）...")
     url = 'https://www.cftc.gov/files/dea/history/fut_disagg_txt_2025.zip'
     all_records = []
 
@@ -155,9 +132,6 @@ def fetch_cftc_csv_fallback():
             if fname.endswith('.txt') or fname.endswith('.csv'):
                 content = z.read(fname).decode('utf-8', errors='ignore')
                 lines = content.split('\n')
-                print(f"  文件 {fname}: {len(lines)} 行")
-                if lines:
-                    print(f"  样本: {lines[0][:120]}")
 
                 for line in lines:
                     if 'COPPER' in line.upper() and ('COMEX' in line.upper() or '085692' in line):
@@ -205,8 +179,8 @@ def write_to_supabase(df):
         print("没有数据可写入")
         return
 
-    if 'YOUR_SECRET_KEY' in SUPABASE_KEY:
-        print("\n⚠ 未填写 SUPABASE_KEY，保存为CSV")
+    if not SUPABASE_KEY:
+        print("\n⚠ 未配置 SUPABASE_KEY，保存为CSV")
         df.to_csv('cftc_data.csv', index=False, encoding='utf-8-sig')
         print("已保存到 cftc_data.csv")
         return
@@ -221,25 +195,22 @@ def write_to_supabase(df):
         return
 
     records = df.to_dict('records')
-    batch_size = 50
     success = 0
 
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i+batch_size]
+    for i in range(0, len(records), 50):
+        batch = records[i:i+50]
         try:
-            # 用 upsert，同日期+来源则更新
             client.table('copper_records').upsert(
                 batch, on_conflict='date,source'
             ).execute()
             success += len(batch)
-            print(f"  已写入 {min(i+batch_size, len(records))}/{len(records)} 条", end='\r')
+            print(f"  已写入 {min(i+50, len(records))}/{len(records)} 条", end='\r')
         except Exception as e:
-            print(f"\n  ✗ 第{i//batch_size+1}批失败: {e}")
+            print(f"\n  ✗ 第{i//50+1}批失败: {e}")
         time.sleep(0.2)
 
     print(f"\n✓ 写入完成：{success} 条")
 
-    # 验证
     print("\n验证最新5条：")
     try:
         resp = client.table('copper_records')\
