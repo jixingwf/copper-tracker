@@ -184,7 +184,7 @@ def import_shfe_inv(client, metal_id, cfg):
             records.append({
                 'metal':    metal_id,
                 'date':     date,
-                'source':   'shfe_inv',
+                'source':   'shfe_inv_99' if metal_id == 'cu' else 'shfe_inv',
                 'shfe_inv': inv,
                 'verified': True,
                 'flagged':  False,
