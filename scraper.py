@@ -69,11 +69,21 @@ def fetch_copper_price():
         if hist.empty:
             return result
         latest = hist.iloc[-1]
-        price_usd_per_ton = latest["Close"] / 100 * 2204.62
+        close = float(latest["Close"])
+        # FIX: yfinance HG=F 现在直接返回"美元/磅"（不再是美分/磅）。
+        # 美元/吨 = 美元/磅 × 2204.62 磅/吨。
+        # 做个自适应：如果数值明显是"美分"量级（>50，对应铜价>$0.5/磅*2204=1100，
+        # 但铜历史最低也不会到$0.005/磅），则按旧逻辑/100；否则直接使用。
+        if close > 50:
+            price_usd_per_ton = close / 100 * 2204.62
+        else:
+            price_usd_per_ton = close * 2204.62
         result['lme'] = round(price_usd_per_ton, 0)
-        result['comex_price_raw'] = round(latest['Close'], 4)
-        result['price_date'] = hist.index[-1].strftime('%Y-%m-%d')
-        print(f"  ✓ COMEX铜: ${latest['Close']:.4f}/磅 → ${price_usd_per_ton:,.0f}/吨")
+        # FIX: 'comex_price_raw' 字段在 copper_records 表中不存在，写入会导致
+        # 整条记录 upsert 失败（PGRST204），改名为 comex_raw 仅用于打印，不写入DB
+        comex_raw = round(close, 4)
+        result['data_date'] = hist.index[-1].strftime('%Y-%m-%d')
+        print(f"  ✓ COMEX铜: ${comex_raw}/磅 → ${price_usd_per_ton:,.0f}/吨 （数据日期 {result['data_date']}）")
     except ImportError:
         print("  ⚠ 请安装 yfinance: pip install yfinance")
     except Exception as e:
@@ -94,7 +104,11 @@ def fetch_shfe_price():
         price = safe_float(latest.get('收盘价'))
         if price:
             result['shfe'] = price
-            print(f"  ✓ SHFE铜主力: {price:,.0f} 元/吨")
+            # FIX: 记录SHFE主力合约这一行对应的真实交易日
+            shfe_date = latest.get('日期')
+            if shfe_date is not None:
+                result['shfe_data_date'] = str(shfe_date)[:10]
+            print(f"  ✓ SHFE铜主力: {price:,.0f} 元/吨 （数据日期 {result.get('shfe_data_date','—')}）")
         else:
             print("  ✗ SHFE价格：无法解析收盘价")
     except Exception as e:
@@ -326,14 +340,9 @@ def run_once(dry_run: bool = False):
     print(f"  铜数据抓取脚本  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*55}\n")
 
-    if not dry_run and check_duplicate(today):
-        print(f"⚠  今天（{today}）已有脚本数据，跳过写入")
-        print("   如需强制写入请用 --force 参数")
-        # 仍继续抓取库存数据（可能今日尚未写入）
-    else:
+    if True:
         # 主记录（价格 + CFTC）
         record = {
-            'date':     today,
             'recorder': 'scraper_bot',
             'source':   'script',
             'verified': True,   # 自动写入直接标记已验证
@@ -351,6 +360,14 @@ def run_once(dry_run: bool = False):
         print("[3/3] CFTC 持仓报告")
         record.update(fetch_cftc_positions())
         time.sleep(1)
+
+        # FIX: 用数据本身的最新交易日作为 date，而不是脚本运行的 today
+        # 取 COMEX / SHFE 两者中较新的数据日期；都没有则回退用 today
+        candidate_dates = [d for d in (record.pop('data_date', None),
+                                        record.pop('shfe_data_date', None)) if d]
+        record['date'] = max(candidate_dates) if candidate_dates else today
+        if record['date'] != today:
+            print(f"  ℹ 数据交易日为 {record['date']}（与脚本运行日 {today} 不同，按数据日期写入）")
 
         # 自动计算沪伦比价
         if record.get('shfe') and record.get('lme'):

@@ -102,24 +102,25 @@ def import_lme_price(client):
         name = METALS[metal_id]['name']
         print(f"  [{name}] LME价格 ({symbol})...")
         try:
-            df = ak.futures_lme_index_symbol_table_sina(symbol=symbol)
+            # FIX: akshare已移除 futures_lme_index_symbol_table_sina，
+            # 改用 futures_foreign_hist（同样的新浪外盘代码 AHD/ZSD/NID/PBD/SND）
+            df = ak.futures_foreign_hist(symbol=symbol)
             if df is None or df.empty:
                 print(f"    [{name}] 空数据，跳过")
                 continue
             print(f"    字段: {df.columns.tolist()}")
             records = []
             for _, row in df.iterrows():
-                # 日期字段可能叫 '日期' 或 'date'
-                date_val = row.get('日期') or row.get('date') or row.get(df.columns[0])
+                # futures_foreign_hist 返回字段通常为 date/open/high/low/close/volume
+                date_val = row.get('date') or row.get('日期') or row.get(df.columns[0])
                 date = str(date_val)[:10]
-                # 价格字段可能叫 '收盘价' 或 '结算价' 或第二列
-                price = safe_float(row.get('收盘价') or row.get('结算价') or row.get(df.columns[1]))
+                price = safe_float(row.get('close') or row.get('收盘价') or row.get('收盘'))
                 if not price or not date or date == 'nan':
                     continue
                 records.append({
                     'metal':     metal_id,
                     'date':      date,
-                    'source':    'script',
+                    'source':    'lme_price',  # FIX: 统一用 lme_price，前端按此source读取
                     'lme_price': price,
                     'verified':  True,
                     'flagged':   False,
