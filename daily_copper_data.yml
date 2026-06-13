@@ -1,0 +1,49 @@
+name: Daily Copper Data
+on:
+  schedule:
+    # 北京时间 23:00 = UTC 15:00，工作日执行
+    # 此时SHFE日盘+夜盘已收盘，COMEX前一交易日数据已落地，数据最新
+    - cron: '0 15 * * 1-5'
+  workflow_dispatch:   # 允许手动触发
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: |
+          pip install requests pandas openpyxl supabase yfinance python-dotenv akshare
+
+      - name: 抓取 COMEX/SHFE 铜价 + CFTC 持仓
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 scraper.py --once
+
+      - name: 抓取 CME COMEX 铜库存
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 fetch_cme_comex.py
+        continue-on-error: true
+
+      # FIX: 原来只在周一执行，改为每天执行，保证LME铜库存/持仓每日更新
+      - name: 抓取 LME + SHFE 铜库存
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 import_lme.py
+        continue-on-error: true
+
+      # FIX: 原来只在周五执行，改为每天执行，保证铝/锌/镍/铅/锡价格和库存每日更新
+      - name: 抓取有色金属（铝/锌/镍/铅/锡）价格+库存
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 import_nonfer.py
+        continue-on-error: true
