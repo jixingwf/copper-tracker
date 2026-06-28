@@ -47,3 +47,9 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python3 import_nonfer.py
         continue-on-error: true
+        - name: 抓取 GFEX 工业硅/碳酸锂/多晶硅 行情+仓单
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 import_gfex.py
+        continue-on-error: true
