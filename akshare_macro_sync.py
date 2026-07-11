@@ -32,6 +32,7 @@
 import argparse
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -62,6 +63,26 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://opgqjxkaocggconjxgpi.supa
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_LiPH9UV6-Y_vYGbMpYZ-fw_k0un32VC")  # 建议改用 service_role key 以便脚本稳定写入
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def fetch_with_retry(func, *args, retries=3, delay=5, **kwargs):
+    """带自动重试的 AkShare 接口调用封装。
+
+    国内数据源（东方财富/金十数据等）偶尔会因为网络抖动、被限速等原因导致
+    连接中途断开（例如 "Response ended prematurely"），尤其是从 GitHub
+    Actions 这类境外服务器访问时更容易出现。这类问题通常隔几秒重试一两次
+    就能成功，不需要让整个分组直接判定失败。
+    """
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                print(f"    第 {attempt} 次请求失败（{e}），{delay} 秒后重试...")
+                time.sleep(delay)
+    raise last_err
 
 
 def upsert_rows(rows):
@@ -146,7 +167,7 @@ def build_row(category, series_code, series_name, dt, value, unit, yoy=None, mom
 def sync_price():
     rows = []
     try:
-        df = ak.macro_china_cpi()  # 全国居民消费价格指数
+        df = fetch_with_retry(ak.macro_china_cpi)  # 全国居民消费价格指数
         # 字段名可能随版本变化，请以 print(df.columns) 实际输出为准微调
         for _, r in df.iterrows():
             rows.append(build_row("price", "cpi_yoy", "CPI 同比", r["月份"],
@@ -157,7 +178,7 @@ def sync_price():
         print(f"  [警告] CPI 抓取失败: {e}")
 
     try:
-        df = ak.macro_china_ppi()  # 工业生产者出厂价格指数
+        df = fetch_with_retry(ak.macro_china_ppi)  # 工业生产者出厂价格指数
         for _, r in df.iterrows():
             rows.append(build_row("price", "ppi_yoy", "PPI 同比", r["月份"],
                                    r.get("PPI-全部工业品-当月同比"), "%", source="国家统计局"))
@@ -170,7 +191,7 @@ def sync_price():
 def sync_pmi():
     rows = []
     try:
-        df = ak.macro_china_pmi()  # 官方制造业/非制造业PMI
+        df = fetch_with_retry(ak.macro_china_pmi)  # 官方制造业/非制造业PMI
         for _, r in df.iterrows():
             rows.append(build_row("pmi", "pmi_mfg", "官方制造业PMI", r["月份"],
                                    r.get("制造业-指数"), "指数", source="国家统计局"))
@@ -180,7 +201,7 @@ def sync_pmi():
         print(f"  [警告] 官方PMI 抓取失败: {e}")
 
     try:
-        df = ak.macro_china_cx_pmi_yearly()  # 财新制造业PMI终值（金十数据）
+        df = fetch_with_retry(ak.macro_china_cx_pmi_yearly)  # 财新制造业PMI终值（金十数据）
         for _, r in df.iterrows():
             rows.append(build_row("pmi", "caixin_pmi_mfg", "财新制造业PMI", r["日期"],
                                    r.get("今值"), "指数", source="财新/Markit"))
@@ -188,7 +209,7 @@ def sync_pmi():
         print(f"  [警告] 财新制造业PMI 抓取失败（接口名可能需调整）: {e}")
 
     try:
-        df = ak.macro_china_cx_services_pmi_yearly()  # 财新服务业PMI（金十数据）
+        df = fetch_with_retry(ak.macro_china_cx_services_pmi_yearly)  # 财新服务业PMI（金十数据）
         for _, r in df.iterrows():
             rows.append(build_row("pmi", "caixin_pmi_services", "财新服务业PMI", r["日期"],
                                    r.get("今值"), "指数", source="财新/Markit"))
@@ -201,7 +222,7 @@ def sync_pmi():
 def sync_money():
     rows = []
     try:
-        df = ak.macro_china_money_supply()  # M0/M1/M2
+        df = fetch_with_retry(ak.macro_china_money_supply)  # M0/M1/M2
         for _, r in df.iterrows():
             rows.append(build_row("money", "m0_yoy", "M0 同比", r["月份"],
                                    r.get("货币和准货币(M2)-同比增长"), "%", source="央行"))
@@ -213,7 +234,7 @@ def sync_money():
         print(f"  [警告] M0/M1/M2 抓取失败: {e}")
 
     try:
-        df = ak.macro_china_shrzgm()  # 社会融资规模增量
+        df = fetch_with_retry(ak.macro_china_shrzgm)  # 社会融资规模增量
         for _, r in df.iterrows():
             rows.append(build_row("money", "shrzgm_increment", "社会融资规模增量", r["月份"],
                                    r.get("社会融资规模增量"), "亿元", source="央行"))
@@ -226,7 +247,7 @@ def sync_money():
 def sync_trade():
     rows = []
     try:
-        df = ak.macro_china_exports_yoy()  # 字段: 商品/日期/今值/预测值/前值
+        df = fetch_with_retry(ak.macro_china_exports_yoy)  # 字段: 商品/日期/今值/预测值/前值
         for _, r in df.iterrows():
             if pd.isna(r.get("今值")):
                 continue
@@ -236,7 +257,7 @@ def sync_trade():
         print(f"  [警告] 出口同比 抓取失败: {e}")
 
     try:
-        df = ak.macro_china_imports_yoy()  # 字段: 商品/日期/今值/预测值/前值
+        df = fetch_with_retry(ak.macro_china_imports_yoy)  # 字段: 商品/日期/今值/预测值/前值
         for _, r in df.iterrows():
             if pd.isna(r.get("今值")):
                 continue
@@ -251,7 +272,7 @@ def sync_trade():
 def sync_retail():
     rows = []
     try:
-        df = ak.macro_china_consumer_goods_retail()
+        df = fetch_with_retry(ak.macro_china_consumer_goods_retail)
         for _, r in df.iterrows():
             rows.append(build_row("retail", "retail_yoy", "社零 同比", r["月份"],
                                    r.get("当月同比增长"), "%", source="国家统计局"))
@@ -263,7 +284,7 @@ def sync_retail():
 def sync_electricity():
     rows = []
     try:
-        df = ak.macro_china_society_electricity()  # 字段: 统计时间/全社会用电量/全社会用电量同比/...
+        df = fetch_with_retry(ak.macro_china_society_electricity)  # 字段: 统计时间/全社会用电量/全社会用电量同比/...
         for _, r in df.iterrows():
             if pd.isna(r.get("全社会用电量同比")):
                 continue
@@ -277,7 +298,7 @@ def sync_electricity():
 def sync_fiscal():
     rows = []
     try:
-        df = ak.macro_china_czsr()  # 财政收入
+        df = fetch_with_retry(ak.macro_china_czsr)  # 财政收入
         for _, r in df.iterrows():
             rows.append(build_row("fiscal", "fiscal_revenue_yoy", "财政收入 累计同比", r["月份"],
                                    r.get("当月同比增长"), "%", source="财政部"))
