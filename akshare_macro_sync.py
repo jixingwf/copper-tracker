@@ -181,7 +181,7 @@ def sync_price():
         df = fetch_with_retry(ak.macro_china_ppi)  # 工业生产者出厂价格指数
         for _, r in df.iterrows():
             rows.append(build_row("price", "ppi_yoy", "PPI 同比", r["月份"],
-                                   r.get("PPI-全部工业品-当月同比"), "%", source="国家统计局"))
+                                   r.get("当月同比增长"), "%", source="国家统计局"))
     except Exception as e:
         print(f"  [警告] PPI 抓取失败: {e}")
 
@@ -209,12 +209,35 @@ def sync_pmi():
         print(f"  [警告] 财新制造业PMI 抓取失败（接口名可能需调整）: {e}")
 
     try:
-        df = fetch_with_retry(ak.macro_china_cx_services_pmi_yearly)  # 财新服务业PMI（金十数据）
+        df = fetch_with_retry(ak.macro_china_cx_services_pmi_yearly)  # 财新服务业PMI（金十数据，作为主数据源）
         for _, r in df.iterrows():
+            if pd.isna(r.get("今值")):
+                continue
             rows.append(build_row("pmi", "caixin_pmi_services", "财新服务业PMI", r["日期"],
                                    r.get("今值"), "指数", source="财新/Markit"))
     except Exception as e:
-        print(f"  [警告] 财新服务业PMI 抓取失败（接口名可能需调整）: {e}")
+        print(f"  [警告] 财新服务业PMI（金十数据源）抓取失败: {e}")
+
+    try:
+        # 财新服务业PMI 备用数据源（财新智库直连），当上面金十数据源缺数据时用这个补充
+        df = fetch_with_retry(ak.index_pmi_ser_cx)  # 字段: 日期/服务业PMI/变化值
+        for _, r in df.iterrows():
+            if pd.isna(r.get("服务业PMI")):
+                continue
+            rows.append(build_row("pmi", "caixin_pmi_services", "财新服务业PMI", r["日期"],
+                                   r.get("服务业PMI"), "指数", source="财新智库"))
+    except Exception as e:
+        print(f"  [警告] 财新服务业PMI（备用数据源）抓取失败: {e}")
+
+    try:
+        df = fetch_with_retry(ak.index_pmi_com_cx)  # 财新中国综合PMI产出指数，字段: 日期/综合PMI/变化值
+        for _, r in df.iterrows():
+            if pd.isna(r.get("综合PMI")):
+                continue
+            rows.append(build_row("pmi", "caixin_pmi_composite", "综合PMI产出指数", r["日期"],
+                                   r.get("综合PMI"), "指数", source="财新智库"))
+    except Exception as e:
+        print(f"  [警告] 综合PMI产出指数 抓取失败: {e}")
 
     return rows
 
@@ -275,7 +298,7 @@ def sync_retail():
         df = fetch_with_retry(ak.macro_china_consumer_goods_retail)
         for _, r in df.iterrows():
             rows.append(build_row("retail", "retail_yoy", "社零 同比", r["月份"],
-                                   r.get("当月同比增长"), "%", source="国家统计局"))
+                                   r.get("同比增长"), "%", source="国家统计局"))
     except Exception as e:
         print(f"  [警告] 社会消费品零售总额 抓取失败: {e}")
     return rows
