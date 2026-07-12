@@ -213,7 +213,7 @@ def sync_pmi():
         for _, r in df.iterrows():
             if pd.isna(r.get("今值")):
                 continue
-            rows.append(build_row("pmi", "caixin_pmi_services", "财新服务业PMI", r["日期"],
+            rows.append(build_row("pmi", "caixin_pmi_svc", "财新服务业PMI", r["日期"],
                                    r.get("今值"), "指数", source="财新/Markit"))
     except Exception as e:
         print(f"  [警告] 财新服务业PMI（金十数据源）抓取失败: {e}")
@@ -224,7 +224,7 @@ def sync_pmi():
         for _, r in df.iterrows():
             if pd.isna(r.get("服务业PMI")):
                 continue
-            rows.append(build_row("pmi", "caixin_pmi_services", "财新服务业PMI", r["日期"],
+            rows.append(build_row("pmi", "caixin_pmi_svc", "财新服务业PMI", r["日期"],
                                    r.get("服务业PMI"), "指数", source="财新智库"))
     except Exception as e:
         print(f"  [警告] 财新服务业PMI（备用数据源）抓取失败: {e}")
@@ -234,7 +234,7 @@ def sync_pmi():
         for _, r in df.iterrows():
             if pd.isna(r.get("综合PMI")):
                 continue
-            rows.append(build_row("pmi", "caixin_pmi_composite", "综合PMI产出指数", r["日期"],
+            rows.append(build_row("pmi", "pmi_composite", "综合PMI产出指数", r["日期"],
                                    r.get("综合PMI"), "指数", source="财新智库"))
     except Exception as e:
         print(f"  [警告] 综合PMI产出指数 抓取失败: {e}")
