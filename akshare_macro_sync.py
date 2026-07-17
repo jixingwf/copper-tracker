@@ -216,7 +216,15 @@ def sync_price():
     rows.extend(_sync_price_sina_history())
     rows.extend(_sync_price_sina_ppi_history())
     rows.extend(_sync_price_manual_core_cpi_history())
-    rows.extend(_sync_price_nbs_extra())
+    try:
+        _extra = _sync_price_nbs_extra()
+        if _extra is None:
+            print("  [调试] _sync_price_nbs_extra 返回了 None，但没有抛出异常——请检查函数内部逻辑")
+        rows.extend(_extra or [])
+    except Exception:
+        import traceback
+        print("  [调试] _sync_price_nbs_extra 内部异常：")
+        traceback.print_exc()
     return rows
 
 
@@ -293,7 +301,14 @@ def _parse_cpi_article(session, url):
             ("core_cpi_mom", "核心CPI 环比", 1),
             ("core_cpi_yoy", "核心CPI 同比", 2),
         ],
+        # ⚠️ 2026年某月起统计局把这一类目的名称从"一、食品烟酒"改成了
+        # "一、食品烟酒及在外餐饮"（大概率是把"在外餐饮"单独纳入了统计口径），
+        # 这里两个名字都注册上，指向同一组 series_code，兼容改名前后的历史文章。
         "一、食品烟酒及在外餐饮": [
+            ("cpi_food_tobacco_mom", "CPI 食品烟酒及在外餐饮 环比", 1),
+            ("cpi_food_tobacco_yoy", "CPI 食品烟酒及在外餐饮 同比", 2),
+        ],
+        "一、食品烟酒": [
             ("cpi_food_tobacco_mom", "CPI 食品烟酒及在外餐饮 环比", 1),
             ("cpi_food_tobacco_yoy", "CPI 食品烟酒及在外餐饮 同比", 2),
         ],
@@ -326,8 +341,16 @@ def _parse_cpi_article(session, url):
             ("cpi_other_yoy", "CPI 其他用品及服务 同比", 2),
         ],
     }
+    # 用 series_code 而不是行标签本身来判断"是否缺失"：因为同一个 series_code
+    # 可能对应新旧两种行标签写法（比如改名前后的"食品烟酒"/"食品烟酒及在外餐饮"），
+    # 一篇文章里通常只会出现其中一种写法，按标签判断会对另一种写法产生误报。
+    all_series_codes = set()
+    for entries in targets.values():
+        for series_code, _series_name, _col_idx in entries:
+            all_series_codes.add(series_code)
+
     results = []
-    matched_labels = set()
+    matched_series_codes = set()
     for table in soup.find_all("table"):
         for tr in table.find_all("tr"):
             cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
@@ -341,11 +364,11 @@ def _parse_cpi_article(session, url):
                     except (ValueError, IndexError):
                         continue
                     results.append((series_code, series_name, val))
-                matched_labels.add(label)
+                    matched_series_codes.add(series_code)
 
-    missing = set(targets) - matched_labels
+    missing = all_series_codes - matched_series_codes
     if missing:
-        print(f"  [警告] CPI文章表格里未匹配到以下行：{missing}（可能是统计局调整了"
+        print(f"  [警告] CPI文章表格里未匹配到以下 series_code 对应的行：{missing}（可能是统计局调整了"
               f"分类命名，需要人工核对文章 {url} 里的表格行标签并更新脚本里的 targets 字典）")
     return period_str, results
 
@@ -376,8 +399,22 @@ def _parse_ppi_article(session, url):
     results = []
 
     # 头条：全国工业生产者出厂价格同比X%，环比Y%（用于 ppi_mom）
+    # "同比"这部分我们其实不需要解析具体数值（脚本只用环比），干脆不对它的格式
+    # 做任何要求，只当锚点：从"工业生产者出厂价格同比"往后非贪婪跳到最近的"环比"，
+    # 这样能同时兼容"同比下降X%"（直给式）和"同比由上月下降X%转为上涨Y%"
+    # （涨跌方向逆转时的转折句式，这种没有数字紧跟在"同比"后面）两种写法。
+    # "环比"和涨跌方向词之间偶尔会插入"均"字（比如某月出厂价格和购进价格环比数值
+    # 恰好相同，统计局会写成"...环比均上涨0.1%"这种合并句式），这里放宽允许。
+    # "环比"本身有时也会用"由X转为Y"的转折句式（比如"环比由下降0.2%转为持平"），
+    # 这种情况下我们要的是"转为"后面那个才是本月的真实值；另外"持平"后面
+    # 经常不带百分号（因为持平=0%，没必要写数字），这里把%也改成可选。
+    # "环比"和方向词之间除了"均"，还可能是"分别"（出厂价格/购进价格环比数值
+    # 不同时的写法，比如"环比分别下降0.2%、0.3%"，第一个数字就是我们要的
+    # 出厂价格环比，顺序对得上，不用额外处理）。
     m_head = re.search(
-        r"工业生产者出厂价格同比(?:上涨|下降)[\d.]+%[，,]\s*环比(上涨|下降|持平)([\d.]*)%", text)
+        r"工业生产者出厂价格同比.*?环比"
+        r"(?:由(?:上月)?(?:上涨|下降|持平)[\d.]*%?转为)?"
+        r"(?:均|分别)?(上涨|下降|持平)([\d.]*)%?", text, re.S)
     if m_head:
         sign = -1 if m_head.group(1) == "下降" else 1
         val = float(m_head.group(2)) if m_head.group(2) else 0.0
